@@ -9,51 +9,43 @@
 const uint8_t DXL_ID = 1; 
 Dynamixel2Arduino dxl(DXL_SERIAL, DXL_DIR_PIN);
 
-int32_t last_pos = 0;
-float PREDICT_FACTOR = 1.2; // 预判系数：1.0表示跟随，1.2表示稍微超前助力
-
 void setup() {
   Serial.begin(115200);
   DXL_SERIAL.begin(57600, SERIAL_8N1, DXL_RX_PIN, DXL_TX_PIN);
   dxl.begin(57600);
   dxl.setPortProtocolVersion(2.0);
 
+  // 1. 关扭矩
   dxl.torqueOff(DXL_ID);
-  
-  // 1. 设为位置控制模式 (Mode 3)
-  dxl.setOperatingMode(DXL_ID, OP_POSITION); 
-  
-  // 2. 【核心修改】降低位置环 P 增益 (地址 84)
-  // 默认通常是 800，调到 100-200 会让电机像弹簧一样“变软”，从而能被你掰动
-  dxl.writeControlTableItem(84, DXL_ID, 150); 
-  
-  dxl.torqueOn(DXL_ID);
-  
-  last_pos = dxl.getPresentPosition(DXL_ID);
-  Serial.println("Position Mode Follower Started.");
+
+  // 2. 强制切换到单圈位置模式 (Mode 3)，这会清除之前累加的数千甚至上万的数值
+  dxl.writeControlTableItem(11, DXL_ID, 3); 
+  delay(200);
+
+  // 3. 检查模式是否切换成功
+  uint8_t mode = dxl.readControlTableItem(11, DXL_ID);
+  Serial.print("Current Mode (Should be 3): ");
+  Serial.println(mode);
+
+  Serial.println("Ready to read 0-4095 raw data...");
 }
 
 void loop() {
-  // 读取当前位置
-  int32_t current_pos = dxl.getPresentPosition(DXL_ID);
-  if (current_pos == -1) return;
+  // 强制读取当前的绝对位置 (4字节)
+  int32_t raw_pos = dxl.getPresentPosition(DXL_ID);
 
-  // 计算位移差
-  int32_t diff = current_pos - last_pos;
+  // 针对 XC430 的单圈掩码处理，确保数值被锁定在 0-4095 之间
+  // 如果你的数值还是很大，说明模式切换没成功，或者固件在以多圈模式运行
+  uint32_t clean_pos = (uint32_t)raw_pos % 4096; 
 
-  // 实现你的逻辑：目标 = 当前 + (当前 - 上次) * 预判
-  // 这样电机就会朝着你推的方向主动移过去
-  int32_t goal_pos = current_pos + (int32_t)(diff * PREDICT_FACTOR);
+  if (raw_pos != -1) {
+    float angle = (float)clean_pos * 360.0 / 4096.0;
 
-  if (abs(diff) > 0) {
-    // 使用库推荐的函数名
-    dxl.setGoalPosition(DXL_ID, goal_pos);
+    Serial.print("Raw:"); Serial.print(raw_pos);
+    Serial.print(" | Cleaned:"); Serial.print(clean_pos);
+    Serial.print(" | Angle:"); Serial.print(angle);
+    Serial.println(" deg");
   }
 
-  // 观察 Real 和 Goal 的差距
-  Serial.print("Real:"); Serial.print(current_pos);
-  Serial.print(" Goal:"); Serial.println(goal_pos);
-
-  last_pos = current_pos;
-  delay(10); 
+  delay(100); 
 }
